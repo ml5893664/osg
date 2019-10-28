@@ -29,6 +29,16 @@
 #include <osg/Depth>
 #include <osg/CullFace>
 #include <osg/TextureCubeMap>
+#include <osg/Stencil>
+#include <osg/ColorMask>
+#include <osg/GLExtensions>
+#include <osg/Depth>
+#include <osg/Texture3D>
+#include <osg/Light>
+#include <osg/LightSource>
+#include <osg/BoundingSphere>
+#include <osg/BoundingBox>
+#include <osg/TexGenNode>
 
 #include <osgDB//WriteFile>
 #include <osgDB//ReadFile>
@@ -543,6 +553,491 @@ osg::ref_ptr<osg::Node> createSkyBox()
 	clearNode->addChild(tranform);
 	return clearNode;
 }
+//定义相机绘制回调
+struct  MyCameraPostDrawCallBack :public osg::Camera::DrawCallback
+{
+public:
+	MyCameraPostDrawCallBack(osg::ref_ptr<osg::Image> image):
+		_image(image)
+	{
+
+	}
+	virtual void operator()(const osg::Camera&/*camera*/) const
+	{
+		if (_image&&_image->getPixelFormat()==GL_RGBA&&_image->getDataType()==GL_UNSIGNED_BYTE)
+		{
+			//获得Image的中心
+			int column_start = _image->s() / 4;
+			int column_end = 3 * column_start;
+
+			int row_start = _image->t() / 4;
+			int row_end = 3 * row_start;
+			//将像素数据进行反向
+			for (int r = row_start; r < row_end;++r)
+			{
+				unsigned char* data = _image->data(column_start, r);
+				for (int c = column_start; c < column_end;++c)
+				{
+					(*data) = 255 - (*data); ++data;
+					(*data) = 255 - (*data); ++data;
+					(*data) = 255 - (*data); ++data;
+					(*data) = 255; ++data;
+				}
+			}
+			_image->dirty();
+		}
+		else if (_image&&_image->getPixelFormat()==GL_RGBA&&_image->getDataType()==GL_FLOAT)
+		{
+			//获得Image的中心
+			int column_start = _image->s() / 4;
+			int column_end = 3 * column_start;
+
+			int row_start = _image->t() / 4;
+			int row_end = 3 * row_start;
+
+			//将像素数据进行反向
+			for (int r = row_start; r < row_end;++r)
+			{
+				float* data = (float*)_image->data(column_start, r);
+				for (int c = column_start; c < column_end;++c)
+				{
+					(*data) = 1.0f - (*data); ++data;
+					(*data) = 1.0f - (*data); ++data;
+					(*data) = 1.0f - (*data); ++data;
+					(*data) = 1.0f; ++data;
+				}
+			}
+			_image->dirty();
+		}
+	}
+public:
+	osg::ref_ptr<osg::Image> _image;
+};
+//创建预渲染场景
+osg::ref_ptr<osg::Node> createPreRenderSubGraph(osg::ref_ptr<osg::Node> subgraph,
+	unsigned tex_width,
+	unsigned tex_height,
+	osg::Camera::RenderTargetImplementation renderImplementation,
+	bool useImage)
+{
+	if (!subgraph) return 0;
+	//创建一个包含预渲染camera的Group节点
+	osg::ref_ptr<osg::Group> parent = new osg::Group;
+	//创建纹理，用来绑定相机渲染的结果
+	osg::ref_ptr<osg::Texture> texture = 0;
+	{
+		osg::ref_ptr<osg::Texture2D> texture2D = new osg::Texture2D;
+		texture2D->setTextureSize(tex_width, tex_height);
+		texture2D->setInternalFormat(GL_RGBA);
+		texture2D->setFilter(osg::Texture2D::MIN_FILTER, osg::Texture2D::LINEAR);
+		texture2D->setFilter(osg::Texture2D::MAG_FILTER, osg::Texture2D::LINEAR);
+		texture = texture2D;
+	}
+	//创建一个用来浏览的四边形几何体
+	{
+		osg::ref_ptr<osg::Geometry> polyGeom = new osg::Geometry;
+		//设置该几何体不适用显示列表
+		polyGeom->setSupportsDisplayList(false);
+		float height = 100.0f;
+		float width = 200.0f;
+		//创建顶点数组，并添加数据
+		osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array;
+		vertices->push_back(osg::Vec3(0.0f, 0.0f, 0.0f));
+		vertices->push_back(osg::Vec3(width, 0.0f, 0.0f));
+		vertices->push_back(osg::Vec3(width, 0.0f, height));
+		vertices->push_back(osg::Vec3(0.0f, 0.0f, height));
+		//创建纹理数组，并添加数据
+		osg::ref_ptr<osg::Vec2Array> texcoords = new osg::Vec2Array;
+		texcoords->push_back(osg::Vec2(0.0f, 0.0f));
+		texcoords->push_back(osg::Vec2(1.0f, 0.0f));
+		texcoords->push_back(osg::Vec2(1.0f, 1.0f));
+		texcoords->push_back(osg::Vec2(0.0f, 1.0f));
+		polyGeom->setVertexArray(vertices);
+		//使用vbo扩展
+		{
+			osg::ref_ptr<osg::VertexBufferObject> vbObject = new osg::VertexBufferObject;
+			vertices->setVertexBufferObject(vbObject);
+			polyGeom->setUseVertexBufferObjects(true);
+		}
+		polyGeom->setTexCoordArray(0, texcoords);
+		//创建颜色数组，并设置绑定方式及添加数据
+		osg::ref_ptr<osg::Vec4Array> colors = new osg::Vec4Array;
+		colors->push_back(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		polyGeom->setColorArray(colors);
+		polyGeom->setColorBinding(osg::Geometry::BIND_OVERALL);
+		polyGeom->addPrimitiveSet(new osg::DrawArrays(osg::PrimitiveSet::QUADS, 0, vertices->size()));
+		//现在需要将纹理附加到该几何体上，创建一个包含该纹理的Stateset
+		osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+		stateset->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+		polyGeom->setStateSet(stateset);
+		osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+		geode->addDrawable(polyGeom);
+		parent->addChild(geode);
+	}
+	//需要创建一个相机节点，用来渲染到该纹理（RTT）
+	{
+		osg::ref_ptr<osg::Camera> camera = new osg::Camera;
+		//设置背景色并清除颜色和深度缓存
+		camera->setClearColor(osg::Vec4(0.1f, 0.1f, 0.3f, 1.0f));
+		camera->setClearMask(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		//获得该节点的范围盒
+		const osg::BoundingSphere& bs = subgraph->getBound();
+		if (!bs.valid())
+		{
+			return subgraph;
+		}
+		float znear = 1.0f*bs.radius();
+		float zfar = 3.0f*bs.radius();
+		float proj_top = 0.25f*znear;
+		float proj_right = 0.5f*znear;
+		znear *= 0.9f;
+		zfar *= 1.1f;
+		//设置投影矩阵
+		camera->setProjectionMatrixAsFrustum(-proj_right, proj_right, -proj_top, proj_top, znear, zfar);
+		//将相机对准该子场景
+		camera->setReferenceFrame(osg::Transform::ABSOLUTE_RF);
+		camera->setViewMatrixAsLookAt(bs.center() - osg::Vec3(0.0f, 2.0f, 0.0f)*bs.radius(), bs.center(), osg::Vec3(0.0f, 0.0f, 1.0f));
+		//设置视口
+		camera->setViewport(0, 0, tex_width, tex_height);
+		//设置相机的渲染序列
+		camera->setRenderOrder(osg::Camera::PRE_RENDER);
+		//设置相机渲染，通过OpenGL frame buffer object 实现
+		camera->setRenderTargetImplementation(renderImplementation);
+		if (useImage)
+		{
+			osg::ref_ptr<osg::Image> image = new osg::Image;
+			//image->allocateImage(tex_width, tex_height, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+			image->allocateImage(tex_width, tex_height, 1, GL_RGBA, GL_FLOAT);
+			//将Image附加到相机的COLOR_BUFFER
+			camera->attach(osg::Camera::COLOR_BUFFER, image);
+			//添加相机的绘制后回调，修改images数据
+			camera->setPostDrawCallback(new MyCameraPostDrawCallBack(image));
+			//这里不直接将相机的COLOR_BUFFER附加到该纹理上是为了修改渲染后的图像数据
+			texture->setImage(0, image);
+		}
+		else
+		{
+			//直接将该纹理附加到相机的颜色缓存
+			camera->attach(osg::Camera::COLOR_BUFFER, texture);
+		}
+		//添加要绘制的子场景
+		camera->addChild(subgraph);
+		parent->addChild(camera);
+	}
+	return parent;
+}
+//创建一维纹理属性
+osg::ref_ptr<osg::StateSet> createTexture1DState1()
+{
+	//创建贴图对象，实际上是一个高度为1的二维图像
+	osg::ref_ptr<osg::Image> image = new osg::Image;
+	//为Image分配一个空间
+	image->allocateImage(1024, 1, 1, GL_RGBA, GL_FLOAT);
+	//设置纹理图像数据格式RGBA
+	image->setInternalTextureFormat(GL_RGBA);
+	//为Image填充数据
+	osg::Vec4* dataPtr = (osg::Vec4*)image->data();
+	for (int i = 0; i < 1024;++i)
+	{
+		*dataPtr++ = osg::Vec4(1.0f, 0.5f, 0.8f, 0.5f);
+	}
+	//创建一维纹理
+	osg::ref_ptr<osg::Texture1D> texture = new osg::Texture1D;
+	//设置环绕模式
+	texture->setWrap(osg::Texture1D::WRAP_S, osg::Texture1D::MIRROR);
+	//设置滤波
+	texture->setFilter(osg::Texture1D::MIN_FILTER, osg::Texture1D::LINEAR);
+	//设置贴图
+	texture->setImage(image);
+	//设置自动纹理坐标，并指定相关的平面
+	osg::ref_ptr<osg::TexGen> texgen = new osg::TexGen;
+	texgen->setMode(osg::TexGen::OBJECT_LINEAR);
+	texgen->setPlane(osg::TexGen::S, osg::Plane(0.0f, 0.0f, 1.0f, -10000));
+	//创建属性集
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	//启用一维纹理
+	stateset->setTextureAttribute(0, texture, osg::StateAttribute::OVERRIDE);
+	stateset->setTextureMode(0, GL_TEXTURE_1D, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+	//启用纹理生成器
+	stateset->setTextureAttribute(0, texgen, osg::StateAttribute::OVERRIDE);
+	stateset->setTextureMode(0, GL_TEXTURE_GEN_S, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+	return stateset;
+}
+//初始化一个图形环境
+class MyGraphicsContext
+{
+public:
+	MyGraphicsContext()
+	{
+		//设置图形环境特性
+		osg::ref_ptr<osg::GraphicsContext::Traits> traits = new osg::GraphicsContext::Traits;
+		//设置左上角坐标
+		traits->x = 0;
+		traits->y = 0;
+		//设置宽度和高度
+		traits->width = 1;
+		traits->height = 1;
+		//设置双缓冲
+		traits->doubleBuffer = false;
+		traits->sharedContext = 0;
+		//设置pbuffer
+		traits->pbuffer = true;
+		//创建图形环境
+		_gc = osg::GraphicsContext::createGraphicsContext(traits);
+		//如果创建失败
+		if (!_gc)
+		{
+			//设置pbuffer为false
+			traits->pbuffer = false;
+			//重新创建图形环境
+			_gc = osg::GraphicsContext::createGraphicsContext(traits);
+		}
+		//是否初始化
+		if (!_gc.valid())
+		{
+			//初始化
+			_gc->realize();
+			_gc->makeCurrent();
+		}
+	}
+	bool valid() const{ return _gc.valid() && _gc->isRealized(); }
+protected:
+private:
+	osg::ref_ptr<osg::GraphicsContext> _gc;
+};
+//向场景中添加光源
+osg::ref_ptr<osg::Group> createLight(osg::ref_ptr<osg::Node> node)
+{
+	osg::ref_ptr<osg::Group> lightRoot = new osg::Group;
+	lightRoot->addChild(node);
+	//开启光照
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	stateset = lightRoot->getOrCreateStateSet();
+	stateset->setMode(GL_LIGHTING, osg::StateAttribute::ON);
+	stateset->setMode(GL_LIGHT0, osg::StateAttribute::ON);
+	//计算包围盒
+	osg::BoundingSphere bs;
+	node->computeBound();
+	bs = node->getBound();
+	//创建一个Light对象
+	osg::ref_ptr<osg::Light> light = new osg::Light;
+	light->setLightNum(0);
+	//设置方向
+	light->setDirection(osg::Vec3(0.0f, 0.0f, -1.0f));
+	//设置位置
+	light->setPosition(osg::Vec4(bs.center().x(), bs.center().y(), bs.center().z() + bs.radius(), 1.0f));
+	//设置环境光的颜色
+	light->setAmbient(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	//设置散射光的颜色
+	light->setDiffuse(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	//设置恒衰减指数
+	light->setConstantAttenuation(1.0f);
+	//设置线性衰减指数
+	light->setLinearAttenuation(0.0f);
+	//设置二次方衰减指数
+	light->setQuadraticAttenuation(0.0f);
+	//创建光源
+	osg::ref_ptr<osg::LightSource> lightSource = new osg::LightSource;
+	lightSource->setLight(light);
+	lightRoot->addChild(lightSource);
+	return lightRoot;
+}
+//创建聚光灯纹理的mipmap贴图
+osg::ref_ptr<osg::Image> createSpotLightImage(const osg::Vec4& centerColor, const osg::Vec4& backgroudColour, unsigned int size, float power)
+{
+	//创建Image对象
+	osg::ref_ptr<osg::Image> image = new osg::Image;
+	//动态分配一个size*size大小的image
+	image->allocateImage(size, size, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+	//填充image以中心为原点，颜色逐渐向四周衰减
+	float mid = (float(size) - 1)*0.5f;
+	float div = 2.0f / float(size);
+	for (unsigned int r = 0; r < size;++r)
+	{
+		unsigned char* ptr = image->data(0, r, 0);
+		for (unsigned int c = 0; c < size;++c)
+		{
+			float dx = (float(c) - mid)*div;
+			float dy = (float(r) - mid)*div;
+			float r = powf(1.0f - sqrtf(dx*dx + dy*dy), power);
+			if (r < 0.0f) r = 0.0f;
+			osg::Vec4 color = centerColor*r + backgroudColour*(1.0f - r);
+			*ptr++ = (unsigned char)((color[0])*255.0f);
+			*ptr++ = (unsigned char)((color[1])*255.0f);
+			*ptr++ = (unsigned char)((color[2])*255.0f);
+			*ptr++ = (unsigned char)((color[3])*255.0f);
+		}
+	}
+	return image;
+}
+//创建聚光灯状态属性
+osg::ref_ptr<osg::StateSet> createSpotLightDecoratorState(unsigned int lightNum, unsigned int textureUnit)
+{
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	//开启ID为lightNum的光照
+	stateset->setMode(GL_LIGHT0 + lightNum, osg::StateAttribute::ON);
+	//设置中心的颜色和环境光的颜色
+	osg::Vec4 centerColour(1.0f, 1.0f,1.0f, 1.0f);
+	osg::Vec4 ambientColour(0.05f, 0.05f, 0.05f, 1.0f);
+	//创建聚光灯纹理
+	osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
+	texture->setImage(createSpotLightImage(centerColour, ambientColour, 64, 1.0));
+	texture->setBorderColor(osg::Vec4(ambientColour));
+	texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_BORDER);
+	texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_BORDER);
+	texture->setWrap(osg::Texture::WRAP_R, osg::Texture::CLAMP_TO_BORDER);
+	//打开纹理单元
+	stateset->setTextureAttributeAndModes(textureUnit, texture, osg::StateAttribute::ON);
+	//设置自动生成纹理坐标
+	stateset->setTextureMode(textureUnit, GL_TEXTURE_GEN_S, osg::StateAttribute::ON);
+	stateset->setTextureMode(textureUnit, GL_TEXTURE_GEN_T, osg::StateAttribute::ON);
+	stateset->setTextureMode(textureUnit, GL_TEXTURE_GEN_R, osg::StateAttribute::ON);
+	stateset->setTextureMode(textureUnit, GL_TEXTURE_GEN_Q, osg::StateAttribute::ON);
+	return stateset;
+}
+//创建聚光灯节点
+osg::ref_ptr<osg::Node> createSpotLightNode(const osg::Vec3& position, const osg::Vec3& direction, float angle, unsigned int lightNum, unsigned int textureUnit)
+{
+	osg::ref_ptr<osg::Group> group = new osg::Group;
+	//创建光源
+	osg::ref_ptr<osg::LightSource> lightsource = new osg::LightSource;
+	osg::ref_ptr<osg::Light> light = lightsource->getLight();
+	light->setLightNum(lightNum);
+	light->setPosition(osg::Vec4(position,1.0f));
+	light->setAmbient(osg::Vec4(0.00f, 0.00f, 0.05f, 1.0f));
+	light->setDiffuse(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	group->addChild(lightsource);
+	//计算法向量
+	osg::Vec3 up(0.0f, 0.0f, 1.0f);
+	up = (direction^up) ^ direction;
+	up.normalize();
+	//创建自动生成纹理坐标节点
+	osg::ref_ptr<osg::TexGenNode> texgenNode = new osg::TexGenNode;
+	//关联纹理单元
+	texgenNode->setTextureUnit(textureUnit);
+	//设置纹理坐标生成器
+	osg::ref_ptr<osg::TexGen> texgen = texgenNode->getTexGen();
+	//设置模式为视觉线性
+	texgen->setMode(osg::TexGen::EYE_LINEAR);
+	//从视图中指定参考平面
+	texgen->setPlanesFromMatrix(osg::Matrixd::lookAt(position, position + direction, up)* osg::Matrixd::perspective(angle, 1.0, 0.1, 100));
+	group->addChild(texgenNode);
+	return group;
+}
+//创建动画路径
+osg::ref_ptr<osg::AnimationPath> createAnimationPath(const osg::Vec3& center, float radius, double looptime)
+{
+	osg::ref_ptr<osg::AnimationPath> animationPath = new osg::AnimationPath;
+	animationPath->setLoopMode(osg::AnimationPath::LOOP);
+	int numSamples = 40;
+	float yaw = 0.0f;
+	float yaw_delta = 2.0f*osg::PI / ((float)numSamples - 1.0f);
+	float roll = osg::inDegrees(30.0f);
+	double time = 0.0f;
+	double time_delta = looptime / (double)numSamples;
+	for (int i = 0; i < numSamples;++i)
+	{
+		osg::Vec3 position(center + osg::Vec3(sinf(yaw)*radius, cosf(yaw)*radius, 0.0f));
+		osg::Quat rotation(osg::Quat(roll, osg::Vec3(0.0, 1.0, 0.0))*osg::Quat(-(yaw + osg::inDegrees(90.0f)), osg::Vec3(0.0, 0.0, 1.0)));
+		animationPath->insert(time, osg::AnimationPath::ControlPoint(position, rotation));
+		yaw += yaw_delta;
+		time += time_delta;
+	}
+	return animationPath;
+}
+//创建地形平面
+osg::ref_ptr<osg::Node> createBase(const osg::Vec3& center, float radius)
+{
+	osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	osg::ref_ptr<osg::Image> image = osgDB::readImageFile("Images/lz.rgb");
+	if (image)
+	{
+		osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
+		texture->setImage(image);
+		stateset->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+	}
+	geode->setStateSet(stateset);
+	osg::ref_ptr<osg::HeightField> grid = new osg::HeightField;
+	grid->allocate(38, 39);
+	grid->setOrigin(center + osg::Vec3(-radius, -radius, 0.0f));
+	grid->setXInterval(radius*2.0f / (float)(38 - 1));
+	grid->setYInterval(radius*2.0f / (float)(39 - 1));
+	float minHeight = FLT_MAX;
+	float maxHeight = -FLT_MAX;
+	unsigned int r;
+	for (r = 0; r < 39;++r)
+	{
+		for (unsigned int c = 0; c < 38;++c)
+		{
+			float h = vertex[r + c * 39][2];
+			if (h>maxHeight) maxHeight = h;
+			if (h<minHeight) minHeight = h;
+		}
+	}
+	float heightScale = radius*0.5f / (maxHeight - minHeight);
+	float heightOffset = -(minHeight + maxHeight)*0.5f;
+	for (r = 0; r < 39;++r)
+	{
+		for (unsigned int c = 0; c < 38;++c)
+		{
+			float h = vertex[r + c * 39][2];
+			grid->setHeight(c, r, (h + heightOffset)*heightScale);
+		}
+	}
+	geode->addDrawable(new osg::ShapeDrawable(grid));
+	osg::ref_ptr<osg::Group> group = new osg::Group;
+	group->addChild(geode);
+	return group;
+
+}
+//创建动画模型
+osg::ref_ptr<osg::Node> createMovingModel(const osg::Vec3&center, float radius)
+{
+	float animationLength = 10.0f;
+	osg::ref_ptr<osg::AnimationPath> animationPath = createAnimationPath(center, radius, animationLength);
+	osg::ref_ptr<osg::Group> model = new osg::Group;
+	osg::ref_ptr<osg::Node> cessns = osgDB::readNodeFile("cessna.osg");
+	if (cessns)
+	{
+		const osg::BoundingSphere& bs = cessns->getBound();
+		float size = radius / bs.radius()*0.3f;
+		osg::ref_ptr<osg::MatrixTransform> positioned = new osg::MatrixTransform;
+		positioned->setDataVariance(osg::Object::STATIC);
+		positioned->setMatrix(osg::Matrix::translate(-bs.center())*
+			osg::Matrix::scale(size, size, size)*
+			osg::Matrix::rotate(osg::inDegrees(180.0f), 0.0f, 0.0f,2.0f));
+		positioned->addChild(cessns);
+
+		osg::ref_ptr<osg::MatrixTransform> xform = new osg::MatrixTransform;
+		xform->setUpdateCallback(new osg::AnimationPathCallback(animationPath, 0.0f, 2.0));
+		xform->addChild(positioned);
+		//添加聚光顶节点
+		xform->addChild(createSpotLightNode(osg::Vec3(0.0f, 0.0f, 0.0f), osg::Vec3(0.0f, 1.0f, -1.0f), 60.0f, 0, 1));
+		model->addChild(xform);
+	}
+	return model;
+}
+//创建场景
+osg::ref_ptr<osg::Node> createModel()
+{
+	osg::Vec3 center(0.0f, 0.0f, 0.0f);
+	float radius = 100.0f;
+	//创建动画模型
+	osg::ref_ptr<osg::Node> shadower = createMovingModel(center, radius*0.5f);
+	//创建地形平面
+	osg::ref_ptr<osg::Node> shadowed = createBase(center - osg::Vec3(0.0f, 0.0f, radius*0.1), radius);
+	//创建场景组节点
+	osg::ref_ptr<osg::Group> root = new osg::Group;
+	//设置状态属性
+	root->setStateSet(createSpotLightDecoratorState(0, 1));
+	//添加子节点
+	root->addChild(shadower);
+	root->addChild(shadowed);
+	return root;
+
+}
+
 
 
 int main()
@@ -719,6 +1214,60 @@ int main()
 	viewer->run();
 	return 0;
 #endif //立方图纹理
+#if 0
+	osg::ref_ptr<osgViewer::Viewer> viewer = new osgViewer::Viewer;
+	unsigned tex_width = 1024;
+	unsigned tex_height = 512;
+	osg::Camera::RenderTargetImplementation renderImplementation = osg::Camera::FRAME_BUFFER_OBJECT;
+	bool useImage = false;
+	//读取模型
+	osg::ref_ptr<osg::Node> loadedModel = osgDB::readNodeFile("cessna.osg");
+	//创建一个transform节点，用来选装该子场景
+	osg::ref_ptr<osg::MatrixTransform> loadedModelTransform = new osg::MatrixTransform;
+	loadedModelTransform->addChild(loadedModel);
+	//设置更新回调
+	osg::ref_ptr<osg::NodeCallback> nc = new osg::AnimationPathCallback(loadedModelTransform->getBound().center(), osg::Vec3(0.0f, 0.0f, 1.0f), osg::inDegrees(45.0f));
+	loadedModelTransform->setUpdateCallback(nc);
+	osg::ref_ptr<osg::Group> rootNode = new osg::Group;
+	rootNode->addChild(createPreRenderSubGraph(loadedModelTransform, tex_width, tex_height, renderImplementation, useImage));
+	viewer->setSceneData(rootNode);
+	viewer->run();
+	return 0;
+#endif //渲染到纹理
+#if 0
+	osg::ref_ptr<osgViewer::Viewer> viewer = new osgViewer::Viewer;
+	osg::ref_ptr<osg::Group> root = new osg::Group;
+	//读取模型
+	osg::ref_ptr<osg::Node> node = osgDB::readNodeFile("cessna.osg");
+	//使用一维纹理属性
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	stateset = createTexture1DState1();
+	node->setStateSet(stateset);
+	root->addChild(node);
+	viewer->setSceneData(root);
+	viewer->run();
+	return 0;
+#endif //一维纹理
+#if 0
+	osg::ref_ptr<osgViewer::Viewer> viewer = new osgViewer::Viewer;
+	osg::ref_ptr<osg::Group> root = new osg::Group;
+	//读取模型
+	osg::ref_ptr<osg::Node> node = osgDB::readNodeFile("cow.osg");
+	//向场景中添加光源
+	root->addChild(createLight(node));
+	viewer->setSceneData(root);
+	viewer->run();
+	return 0;
+#endif //简单光源
+#if 0
+	osg::ref_ptr<osgViewer::Viewer> viewer = new osgViewer::Viewer;
+	osg::ref_ptr<osg::Group> root = new osg::Group;
+	root->addChild(createModel());
+	viewer->setSceneData(root);
+	viewer->run();
+	return 0;
+#endif //聚光灯
+
 
 
 }
