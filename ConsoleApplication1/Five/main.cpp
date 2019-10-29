@@ -39,6 +39,7 @@
 #include <osg/BoundingSphere>
 #include <osg/BoundingBox>
 #include <osg/TexGenNode>
+#include <osg/Material>
 
 #include <osgDB//WriteFile>
 #include <osgDB//ReadFile>
@@ -946,51 +947,50 @@ osg::ref_ptr<osg::AnimationPath> createAnimationPath(const osg::Vec3& center, fl
 	return animationPath;
 }
 //创建地形平面
-osg::ref_ptr<osg::Node> createBase(const osg::Vec3& center, float radius)
-{
-	osg::ref_ptr<osg::Geode> geode = new osg::Geode;
-	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
-	osg::ref_ptr<osg::Image> image = osgDB::readImageFile("Images/lz.rgb");
-	if (image)
-	{
-		osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
-		texture->setImage(image);
-		stateset->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
-	}
-	geode->setStateSet(stateset);
-	osg::ref_ptr<osg::HeightField> grid = new osg::HeightField;
-	grid->allocate(38, 39);
-	grid->setOrigin(center + osg::Vec3(-radius, -radius, 0.0f));
-	grid->setXInterval(radius*2.0f / (float)(38 - 1));
-	grid->setYInterval(radius*2.0f / (float)(39 - 1));
-	float minHeight = FLT_MAX;
-	float maxHeight = -FLT_MAX;
-	unsigned int r;
-	for (r = 0; r < 39;++r)
-	{
-		for (unsigned int c = 0; c < 38;++c)
-		{
-			float h = vertex[r + c * 39][2];
-			if (h>maxHeight) maxHeight = h;
-			if (h<minHeight) minHeight = h;
-		}
-	}
-	float heightScale = radius*0.5f / (maxHeight - minHeight);
-	float heightOffset = -(minHeight + maxHeight)*0.5f;
-	for (r = 0; r < 39;++r)
-	{
-		for (unsigned int c = 0; c < 38;++c)
-		{
-			float h = vertex[r + c * 39][2];
-			grid->setHeight(c, r, (h + heightOffset)*heightScale);
-		}
-	}
-	geode->addDrawable(new osg::ShapeDrawable(grid));
-	osg::ref_ptr<osg::Group> group = new osg::Group;
-	group->addChild(geode);
-	return group;
-
-}
+//osg::ref_ptr<osg::Node> createBase(const osg::Vec3& center, float radius)
+//{
+//	osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+//	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+//	osg::ref_ptr<osg::Image> image = osgDB::readImageFile("Images/lz.rgb");
+//	if (image)
+//	{
+//		osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
+//		texture->setImage(image);
+//		stateset->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+//	}
+//	geode->setStateSet(stateset);
+//	osg::ref_ptr<osg::HeightField> grid = new osg::HeightField;
+//	grid->allocate(38, 39);
+//	grid->setOrigin(center + osg::Vec3(-radius, -radius, 0.0f));
+//	grid->setXInterval(radius*2.0f / (float)(38 - 1));
+//	grid->setYInterval(radius*2.0f / (float)(39 - 1));
+//	float minHeight = FLT_MAX;
+//	float maxHeight = -FLT_MAX;
+//	unsigned int r;
+//	for (r = 0; r < 39;++r)
+//	{
+//		for (unsigned int c = 0; c < 38;++c)
+//		{
+//			float h = vertex[r + c * 39][2];
+//			if (h>maxHeight) maxHeight = h;
+//			if (h<minHeight) minHeight = h;
+//		}
+//	}
+//	float heightScale = radius*0.5f / (maxHeight - minHeight);
+//	float heightOffset = -(minHeight + maxHeight)*0.5f;
+//	for (r = 0; r < 39;++r)
+//	{
+//		for (unsigned int c = 0; c < 38;++c)
+//		{
+//			float h = vertex[r + c * 39][2];
+//			grid->setHeight(c, r, (h + heightOffset)*heightScale);
+//		}
+//	}
+//	geode->addDrawable(new osg::ShapeDrawable(grid));
+//	osg::ref_ptr<osg::Group> group = new osg::Group;
+//	group->addChild(geode);
+//	return group;
+//}
 //创建动画模型
 osg::ref_ptr<osg::Node> createMovingModel(const osg::Vec3&center, float radius)
 {
@@ -1019,24 +1019,24 @@ osg::ref_ptr<osg::Node> createMovingModel(const osg::Vec3&center, float radius)
 	return model;
 }
 //创建场景
-osg::ref_ptr<osg::Node> createModel()
-{
-	osg::Vec3 center(0.0f, 0.0f, 0.0f);
-	float radius = 100.0f;
-	//创建动画模型
-	osg::ref_ptr<osg::Node> shadower = createMovingModel(center, radius*0.5f);
-	//创建地形平面
-	osg::ref_ptr<osg::Node> shadowed = createBase(center - osg::Vec3(0.0f, 0.0f, radius*0.1), radius);
-	//创建场景组节点
-	osg::ref_ptr<osg::Group> root = new osg::Group;
-	//设置状态属性
-	root->setStateSet(createSpotLightDecoratorState(0, 1));
-	//添加子节点
-	root->addChild(shadower);
-	root->addChild(shadowed);
-	return root;
-
-}
+//osg::ref_ptr<osg::Node> createModel()
+//{
+//	osg::Vec3 center(0.0f, 0.0f, 0.0f);
+//	float radius = 100.0f;
+//	//创建动画模型
+//	osg::ref_ptr<osg::Node> shadower = createMovingModel(center, radius*0.5f);
+//	//创建地形平面
+//	osg::ref_ptr<osg::Node> shadowed = createBase(center - osg::Vec3(0.0f, 0.0f, radius*0.1), radius);
+//	//创建场景组节点
+//	osg::ref_ptr<osg::Group> root = new osg::Group;
+//	//设置状态属性
+//	root->setStateSet(createSpotLightDecoratorState(0, 1));
+//	//添加子节点
+//	root->addChild(shadower);
+//	root->addChild(shadowed);
+//	return root;
+//}
+//
 
 
 
@@ -1267,6 +1267,33 @@ int main()
 	viewer->run();
 	return 0;
 #endif //聚光灯
+#if 0
+	osg::ref_ptr<osgViewer::Viewer> viewer = new osgViewer::Viewer;
+	osg::ref_ptr<osg::Group> root = new osg::Group;
+	//读取模型
+	osg::ref_ptr<osg::Node> node = createNode();
+	//得到状态属性
+	osg::ref_ptr<osg::StateSet> stateset = new osg::StateSet;
+	stateset = node->getOrCreateStateSet();
+	//创建材质对象
+	osg::ref_ptr<osg::Material> mat = new osg::Material;
+	//设置正面散射颜色
+	mat->setDiffuse(osg::Material::FRONT, osg::Vec4(1.0f, 0.0f, 0.0f, 1.0f));
+	//设置正面镜面颜色
+	mat->setSpecular(osg::Material::FRONT, osg::Vec4(1.0f, 0.0f, 0.0f, 1.0f));
+	//设置正面指数
+	mat->setShininess(osg::Material::FRONT, 90.0f);
+	stateset->setAttribute(mat);
+	//设置背面剔除
+	osg::ref_ptr<osg::CullFace> cullface = new osg::CullFace(osg::CullFace::BACK);
+	stateset->setAttribute(cullface);
+	stateset->setMode(GL_CULL_FACE, osg::StateAttribute::ON);
+	root->addChild(node);
+	viewer->setSceneData(root);
+	viewer->run();
+	return 0;
+#endif //材质
+
 
 
 
