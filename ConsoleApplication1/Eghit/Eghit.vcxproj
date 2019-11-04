@@ -77,10 +77,17 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>OpenThreads.lib;osg.lib;osgViewer.lib;osgDB.lib;osgUtil.lib;osgGA.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>OpenThreads.lib;osg.lib;osgViewer.lib;osgDB.lib;osgUtil.lib;osgGA.lib;osgText.lib;osgFX.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="PickHandler.cpp" />
+    <ClCompile Include="TravelManipulator.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="PickHandler.h" />
+    <ClInclude Include="TravelManipulator.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
